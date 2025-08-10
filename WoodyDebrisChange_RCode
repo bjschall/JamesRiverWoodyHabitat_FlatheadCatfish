@@ -1,0 +1,82 @@
+library(readxl)
+library(tidyverse)
+library(tidybayes)
+library(magrittr)
+library(brms)
+
+df<-read_excel("James Habitat Final.xlsx", sheet = "Sheet3")
+str(df)
+
+df$Year<-as.factor(df$Year)
+
+df %>% group_by(Year) %>% summarize(c = mean(Count), a=mean(Area)) %>% as.data.frame()
+############################################################
+###### Bayes model - count of wood
+#identify priors
+get_prior(Count~Year,
+          data=df, family=poisson())
+
+#model
+mod<- brm(Count~Year,
+                data=df, 
+                prior = c(prior(normal(3,3), class = "Intercept"),
+                          prior(normal(0, 3), class = "b")),
+                family=poisson(link="log"),
+                file="wood_counts.rds",
+                chains=4, iter=2000, cores=4)
+
+#model summary and checks
+summary(mod)
+pp_check(mod, ndraws = 50, type = "dens_overlay_grouped", group = "Year")+theme_classic()
+
+#ggsave("FigureS1.ppcheck_woodcount.jpeg", height=4, width=8, units="in", dpi=800)
+
+#Sample posterior for magnitude of difference
+posts <- add_epred_draws(mod, re_formula = NA,
+                               newdata = mod$data %>% distinct(Year))
+
+#calculate means and 95% quantile-based CrI
+qi<-posts%>% 
+  mean_qi();as.data.frame(qi)
+
+#Estimate probabilities of differences between groups
+posts_wide<-posts %>%  
+  ungroup() %>% 
+  select(.draw, Year, .epred) %>% 
+  pivot_wider(names_from = Year, values_from=.epred) %>% 
+  mutate(Diff=`2015`-`2022`)
+sum(posts_wide$Diff>0)/4000
+
+
+############################################################
+###### Bayes model - area of wood
+mod2<- brm(Area~Year,
+          data=df, 
+          prior = c(prior(normal(6,6), class = "Intercept"),
+                    prior(normal(0, 5), class = "b"),
+                    prior(exponential(0.5), class = "shape")),
+          family=Gamma(link="log"),
+          file="wood_area.rds",
+          chains=4, iter=2000, cores=4)
+
+#model summary and checks
+summary(mod2)
+pp_check(mod2, ndraws = 50, type = "dens_overlay_grouped", group = "Year")+theme_classic()
+
+#ggsave("FigureS2.ppcheck_woodarea.jpeg", height=4, width=8, units="in", dpi=800)
+
+#Sample posterior for magnitude of difference
+posts2 <- add_epred_draws(mod2, re_formula = NA,
+                         newdata = mod$data %>% distinct(Year))
+
+#calculate means and 95% quantile-based CrI
+qi2<-posts2%>% 
+  mean_qi();as.data.frame(qi2)
+
+#Estimate probabilities of differences between groups
+posts_wide2<-posts2 %>%  
+  ungroup() %>% 
+  select(.draw, Year, .epred) %>% 
+  pivot_wider(names_from = Year, values_from=.epred) %>% 
+  mutate(Diff=`2015`-`2022`)
+sum(posts_wide2$Diff>0)/4000
