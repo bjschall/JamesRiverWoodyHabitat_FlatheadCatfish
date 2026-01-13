@@ -10,70 +10,31 @@ dfhc %>% group_by(Year) %>% summarize(meanTL=mean(Length), SE=sd(Length)/sqrt(le
                                       l25=quantile(Length, probs=0.25), u25=quantile(Length, probs=0.75), 
                                       n=length(Year))
 
+unique(dfhc$Date)
 
-#length-frequency histograms by year
-dfhc %>% mutate(Flood = ifelse(Year==2018, "Pre","Post")) %>% 
-  ggplot()+
-  geom_histogram(aes(x=Length, fill=Flood), binwidth = 10)+
-  facet_wrap(~Year, ncol = 1)+
-  #scale_x_continuous(breaks=seq(100,1400,by=100))+
-  #scale_y_continuous(limits = c(0,25),expand = c(0,0))+
-  theme_bw()+
-  ylab("Freqency")+
-  theme(panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank(),
-        axis.title = element_text(size=15), 
-        axis.text = element_text(size=12), 
-        strip.text = element_text(size=13))+
-  scale_fill_manual(values = c("gray10", "gray70"),
-                    guide = guide_legend(reverse = TRUE))
-
-##Cumulative length-frequency histograms by year
-dfhc %>% mutate(Flood = ifelse(Year==2018, "Pre","Post")) %>% 
-  ggplot()+
-  stat_ecdf(aes(x=Length, color=Flood, group=Year))+
-  #facet_wrap(~Year, ncol = 1)+
-  scale_x_continuous(limits=c(0,1300),breaks=seq(0,1400,by=200), expand=c(0,0))+
-  scale_y_continuous(expand = c(0,0))+
-  theme_bw()+
-  ylab("Freqency")+
-  theme(panel.grid.major = element_blank(), 
-        panel.grid.minor = element_blank(),
-        axis.title = element_text(size=15), 
-        axis.text = element_text(size=12))+
-  scale_color_manual(values = c("black", "gray70"),
-                    guide = guide_legend(reverse = TRUE))+
-  annotate("label", x = 300, y = 0.5, label = "2018", size=4, col="gray50")+
-  annotate("label", x = 250, y = 0.17, label = "2022", size=4)+
-  annotate("label", x = 400, y = 0.28, label = "2023", size=4)+
-  annotate("label", x = 500, y = 0.34, label = "2024", size=4)
- 
 ## Model Length by Year - start by determining necessary Priors
 get_prior(bf(Length ~ Year, shape~Year),
           data = dfhc %>% mutate(Year=as.factor(Year)),
           family = Gamma(link="log"))
 
 #Simulate potential priors using a range of values based on Schall and Lucchesi 2021 expected Flathead sizes
-shape.vals=seq(0.5, 10, .5) 
-scale.vals=seq(0.5, 6, 0.5) 
-
 #create null object to turn into tibble
 tib <- NULL 
 
 #For loop used to run multiple r gamma simulations 
 #exponenitate the scale parameter based on brms log link
-for (i in 1:20){
-  for (j in 1:12){
-    vector_name<-paste0("sim",i,j) 
-  sim <- rgamma(n=1000, shape=shape.vals[i], scale=exp(scale.vals[j])) 
-  tib <- as_tibble(cbind(tib, sim))
-  names(tib)[ncol(tib)] <- paste0(i/2,",",j/2)
+for (i in seq(0.5, 10, .5)){
+  for (j in seq(3, 8, 0.5)){
+    vector_name<-paste0("sim",i,j)
+    sim <- rgamma(n=1000, shape=i, scale=exp(j)) 
+    tib <- as_tibble(cbind(tib, sim))
+    names(tib)[ncol(tib)] <- paste0(i,",",j)
     }
 }
 
 #plot
 tib %>% 
-  pivot_longer(cols=1:240, names_to = "sim", values_to="values") %>% 
+  pivot_longer(cols=1:220, names_to = "sim", values_to="values") %>% 
   arrange(sim) %>% 
   group_by(sim) %>% 
   mutate(ID = cur_group_id()) %>% 
@@ -82,7 +43,10 @@ tib %>%
          scale=as.numeric(scale)) %>%
   ggplot()+
   stat_ecdf(aes(x=values, group=shape, col=shape))+
-  facet_wrap(~scale)
+  scale_x_continuous(limits=c(0,2000))+
+  facet_wrap(~scale, nrow = 2)+
+  xlab("Total length (mm)")+
+  ylab("Cumulative length-frequency distribution")
 
 
 #Run Bayesian Model
@@ -98,7 +62,14 @@ PrePost_Comp <- brm(bf(Length ~ Year, shape ~ Year),
 
 #Perform model checks
 summary(PrePost_Comp)
-pp_check(PrePost_Comp, ndraws=40, type="dens_overlay_grouped", group = "Year") + theme_classic()
+pp_check(PrePost_Comp, ndraws=40, type="dens_overlay_grouped", group = "Year") + 
+  theme_classic()+
+  ylab("Frequency")+
+  xlab("Total length (mm)")+
+  theme(axis.text = element_text(size=12), 
+        axis.title = element_text(size=16), 
+        strip.text = element_text(size=12), 
+        legend.text = element_text(size=12))
 
 #ggsave("FigureS3.ppcheck_FHC.jpeg", height=8, width=8, units="in", dpi=800)
 
@@ -141,39 +112,44 @@ preds %>% mutate(Year=as.factor(Year)) %>%
   ggplot()+
   stat_ecdf(aes(x=.prediction, group=Year, col=Year), linetype=2, linewidth=1)+
   stat_ecdf(data=dfhc,aes(x=Length, col=as.character(Year), group=Year))+
-  scale_x_continuous(breaks=seq(0,1600,by=100), limits=c(0,1650))+
+  scale_x_continuous(breaks=seq(0,1600,by=200), limits=c(0,1640))+
   scale_color_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
   theme_bw()+
   ylab("Freqency")+
-  xlab("Total length")+
+  xlab("Total length (mm)")+
   theme(panel.grid.major = element_blank(), 
         panel.grid.minor = element_blank(),
         panel.border=element_blank(),
         axis.line.x = element_line(colour = "black"),
         axis.line.y = element_line(colour = "black"),
-        axis.title = element_text(size=14), 
-        axis.text = element_text(size=10))
+        axis.title = element_text(size=16), 
+        axis.text = element_text(size=12),
+        legend.text = element_text(size=12),
+        legend.position = c(0.8,0.3))
 
 #ggsave("Figure3.CummulativeFreq.jpeg", height=5, width=8, units="in", dpi=800)
 
 #Plot posteior overlaps
 preds %>% mutate(Year=as.factor(Year)) %>% 
   ggplot(aes(x=.prediction, fill=Year, color=Year))+
-  scale_y_continuous(labels=NULL)+
-  scale_x_continuous(breaks=seq(0,1600,by=100), limits=c(0,1650))+
+  scale_y_continuous()+
+  scale_x_continuous(breaks=seq(0,1600,by=200), limits=c(0,1640))+
   ggridges::geom_density_ridges(aes(y=0),alpha=0.4)+
   scale_fill_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
   scale_color_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
-  labs(x="Total Length (mm)",
-       y="")+
+  labs(x="Total length (mm)",
+       y="Frequency")+
   theme_bw()+
   theme(panel.border = element_blank(), 
         panel.grid.major.y = element_blank(),
         panel.grid.minor.y = element_blank(),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.x = element_blank(),
         axis.line.x = element_line(colour = "black"),
         axis.line.y = element_line(colour = "black"),
         axis.title = element_text(size=14), 
-        axis.text = element_text(size=10),
+        axis.text = element_text(size=12),
+        legend.text = element_text(size=12),
         legend.title=element_blank(),
         axis.ticks.length.y = unit(0, "cm"),
         legend.position="top")
@@ -186,3 +162,21 @@ x <- preds %>% filter(Year==2018)
 y <- preds %>% filter(Year==2022)
 
 overlapping::overlap(list(x$.prediction, y$.prediction))
+#plot(bayestestR::overlap(x$.prediction, y$.prediction))
+
+##########################################################################################
+############################### PSD values ###############################################
+##########################################################################################
+library(FSA)
+##View PSD length cut-offs
+(fhc.cuts <- psdVal("Flathead Catfish"))
+
+#Data manipulation
+all <- dfhc %>% 
+  filter(Length >= fhc.cuts["stock"]) %>% 
+  mutate(gcat = lencat(Length, breaks=fhc.cuts, use.names = T, drop.levels = T))
+
+#subset by year and calculate PSD w/ Confidence Interval
+dat <- all %>% filter(Year==2018) 
+psdCalc(~Length, data=dat, species="Flathead Catfish", what = "traditional")
+
