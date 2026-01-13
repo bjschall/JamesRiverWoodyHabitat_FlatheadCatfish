@@ -3,7 +3,7 @@ library(tidyverse)
 library(isdbayes)
 library(brms)
 library(tidybayes)
-dfhc<-read_excel("FHC all data 2018-2023.xlsx", sheet="June")
+dfhc<-read_excel("FHC all data 2018-2024.xlsx", sheet="June")
 
 ###General data summaries of length by year
 dfhc %>% group_by(Year) %>% summarize(meanTL=mean(Length), SE=sd(Length)/sqrt(length(Length)), 
