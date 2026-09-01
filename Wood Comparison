@@ -29,7 +29,7 @@ mod<- brm(Count~Year,
 summary(mod)
 pp_check(mod, ndraws = 40, type = "dens_overlay_grouped", group = "Year")+
   theme_classic()+
-  ylab("Frequency")+
+  ylab("Density")+
   xlab("Wood complexes/km")+
   theme(axis.text = element_text(size=12), 
         axis.title = element_text(size=16), 
@@ -39,8 +39,7 @@ pp_check(mod, ndraws = 40, type = "dens_overlay_grouped", group = "Year")+
 #ggsave("FigureS1.ppcheck_woodcount.jpeg", height=4, width=8, units="in", dpi=800)
 
 #Sample posterior for magnitude of difference
-posts <- add_epred_draws(mod, re_formula = NA,
-                               newdata = mod$data %>% distinct(Year))
+posts <- add_epred_draws(mod, newdata = mod$data %>% distinct(Year))
 
 #calculate means and 95% quantile-based CrI
 qi<-posts%>% 
@@ -54,6 +53,24 @@ posts_wide<-posts %>%
   mutate(Diff=`2015`-`2022`)
 sum(posts_wide$Diff>0)/4000
 
+########################################################
+######### Sensitivity - count      
+mod_sens<- brm(Count~Year,
+          data=df, 
+          prior = c(prior(normal(3,6), class = "Intercept"),
+                    prior(normal(0, 6), class = "b")),
+          family=poisson(link="log"),
+          file="wood_counts_sens.rds",
+          chains=4, iter=2000, cores=8)
+
+#posterior comparison
+posts_sens <- add_epred_draws(mod_sens, newdata = mod_sens$data %>% distinct(Year))
+qi_sens<- posts_sens %>%  mean_qi() %>% rename(.epred_sens=.epred)
+
+qi %>% 
+  select(Year, .epred) %>% 
+  left_join(qi_sens) %>% 
+  as.data.frame()
 
 ############################################################
 ###### Bayes model - area of wood
@@ -70,18 +87,15 @@ mod2<- brm(Area~Year,
 summary(mod2)
 pp_check(mod2, ndraws = 40, type = "dens_overlay_grouped", group = "Year")+
   theme_classic()+
-  ylab("Frequency")+
+  ylab("Density")+
   xlab("Area of wood complexes/km")+
   theme(axis.text = element_text(size=12), 
         axis.title = element_text(size=16), 
         strip.text = element_text(size=12), 
         legend.text = element_text(size=12))
 
-#ggsave("FigureS2.ppcheck_woodarea.jpeg", height=4, width=8, units="in", dpi=800)
-
 #Sample posterior for magnitude of difference
-posts2 <- add_epred_draws(mod2, re_formula = NA,
-                         newdata = mod$data %>% distinct(Year))
+posts2 <- add_epred_draws(mod2, newdata = mod$data %>% distinct(Year))
 
 #calculate means and 95% quantile-based CrI
 qi2<-posts2%>% 
@@ -94,3 +108,24 @@ posts_wide2<-posts2 %>%
   pivot_wider(names_from = Year, values_from=.epred) %>% 
   mutate(Diff=`2015`-`2022`)
 sum(posts_wide2$Diff>0)/4000
+
+########################################################
+######### Sensitivity - count 
+mod2_sens<- brm(Area~Year,
+           data=df, 
+           prior = c(prior(normal(6,12), class = "Intercept"),
+                     prior(normal(0, 10), class = "b"),
+                     prior(exponential(0.25), class = "shape")),
+           family=Gamma(link="log"),
+           file="wood_area_sens.rds",
+           chains=4, iter=2000, cores=8)
+
+#posterior comparison
+posts2_sens <- add_epred_draws(mod2_sens, newdata = mod2_sens$data %>% distinct(Year))
+qi2_sens<- posts2_sens %>%  mean_qi() %>% rename(.epred_sens=.epred)
+
+qi2 %>% 
+  select(Year, .epred) %>% 
+  left_join(qi2_sens) %>% 
+  as.data.frame()
+
