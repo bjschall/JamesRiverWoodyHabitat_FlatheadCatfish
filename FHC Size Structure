@@ -1,16 +1,16 @@
-library(readxl)
 library(tidyverse)
 library(isdbayes)
 library(brms)
 library(tidybayes)
-
-#load data
-load("Environment_Wood_FHC_Github.RData")
+library(FSA)
+load("FHC_Environment.RData")
 
 ###General data summaries of length by year
-dfhc %>% group_by(Year) %>% summarize(meanTL=mean(Length), SE=sd(Length)/sqrt(length(Length)), 
+dfhc %>% 
+  group_by(Year) %>% summarize(meanTL=mean(Length), SE=sd(Length)/sqrt(length(Length)), 
                                       l25=quantile(Length, probs=0.25), u25=quantile(Length, probs=0.75), 
-                                      n=length(Year))
+                                      n=length(Year)) 
+  
 
 unique(dfhc$Date)
 
@@ -60,20 +60,20 @@ PrePost_Comp <- brm(bf(Length ~ Year, shape ~ Year),
             prior(normal(0.5, 0.25), class="b"),
             prior(normal(1, 1), class="b", dpar="shape"),
             prior(normal(5,3), class="Intercept", dpar="shape")),
-    cores = 4, chains = 4, iter = 2000)
+    cores = 8, chains = 4, iter = 2000)
+
 
 #Perform model checks
 summary(PrePost_Comp)
 pp_check(PrePost_Comp, ndraws=40, type="dens_overlay_grouped", group = "Year") + 
   theme_classic()+
-  ylab("Frequency")+
+  ylab("Density")+
   xlab("Total length (mm)")+
   theme(axis.text = element_text(size=12), 
         axis.title = element_text(size=16), 
         strip.text = element_text(size=12), 
         legend.text = element_text(size=12))
 
-#ggsave("FigureS3.ppcheck_FHC.jpeg", height=8, width=8, units="in", dpi=800)
 
 #Sample from the posterior
 dat_new<-tibble(Year=unique(dfhc$Year))
@@ -88,7 +88,6 @@ sum(as_draws_df(PrePost_Comp, variable="b_shape_Year2024")$b_shape_Year2024>0)/4
 
 #summarize results of sample and compare to posterior
 dfhc %>% group_by(Year) %>% summarize(meanTL=mean(Length), medTL=median(Length))
-preds %>% group_by(Year) %>% summarize(meanTL=mean(.prediction), medTL=median(.prediction))
 draws %>% group_by(Year) %>% summarize(meanTL=mean(.epred), sd=sd(.epred))
 
 preds %>% group_by(Year) %>% mean_qi(.width=0.5)
@@ -109,7 +108,8 @@ sum(draws_wide$mdiff_2024>0)/4000*100
 sum(draws_wide$mdiff_22_23>0)/4000*100
 sum(draws_wide$mdiff_23_24>0)/4000*100
 
-#plot cummulative frequency distributions
+
+#plot cumulative frequency distributions
 preds %>% mutate(Year=as.factor(Year)) %>% 
   ggplot()+
   stat_ecdf(aes(x=.prediction, group=Year, col=Year), linetype=2, linewidth=1)+
@@ -117,7 +117,7 @@ preds %>% mutate(Year=as.factor(Year)) %>%
   scale_x_continuous(breaks=seq(0,1600,by=200), limits=c(0,1640))+
   scale_color_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
   theme_bw()+
-  ylab("Freqency")+
+  ylab("Cumulative frequency")+
   xlab("Total length (mm)")+
   theme(panel.grid.major = element_blank(), 
         panel.grid.minor = element_blank(),
@@ -129,7 +129,7 @@ preds %>% mutate(Year=as.factor(Year)) %>%
         legend.text = element_text(size=12),
         legend.position = c(0.8,0.3))
 
-#ggsave("Figure3.CummulativeFreq.jpeg", height=5, width=8, units="in", dpi=800)
+#ggsave("Figure3.CumulativeFreq.jpeg", height=5, width=8, units="in", dpi=800)
 
 #Plot posteior overlaps
 preds %>% mutate(Year=as.factor(Year)) %>% 
@@ -140,7 +140,7 @@ preds %>% mutate(Year=as.factor(Year)) %>%
   scale_fill_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
   scale_color_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
   labs(x="Total length (mm)",
-       y="Frequency")+
+       y="Relative frequency")+
   theme_bw()+
   theme(panel.border = element_blank(), 
         panel.grid.major.y = element_blank(),
@@ -166,6 +166,31 @@ y <- preds %>% filter(Year==2022)
 overlapping::overlap(list(x$.prediction, y$.prediction))
 #plot(bayestestR::overlap(x$.prediction, y$.prediction))
 
+##########################################################################
+###################        Sensitivity analysis        ################### 
+PrePost_Comp_sens <- brm(bf(Length ~ Year, shape ~ Year),
+                         data = dfhc %>% mutate(Year=as.factor(Year)),
+                         family = brmsfamily(family="Gamma", link="log", link_shape="identity"),
+                         file="Gamma_LFComp_variableShape_sens.rds",
+                         prior=c(prior(normal(5, 4), class="Intercept"),
+                                 prior(normal(0.5, 0.5), class="b"),
+                                 prior(normal(1, 2), class="b", dpar="shape"),
+                                 prior(normal(5,6), class="Intercept", dpar="shape")),
+                         cores = 8, chains = 4, iter = 2000)
+
+summary(PrePost_Comp_sens)
+#posterior sampling
+draws_sens <- add_epred_draws(dat_new, PrePost_Comp_sens)
+draws %>% group_by(Year) %>% summarize(meanTL=mean(.epred), sd=sd(.epred))
+draws_sens %>% group_by(Year) %>% summarize(meanTL=mean(.epred), sd=sd(.epred))
+#prediction
+preds_sens <-add_predicted_draws(dat_new, PrePost_Comp_sens)
+
+#Test for overlap among density distributions
+x_sens <- preds_sens %>% filter(Year==2018)
+y_sens <- preds_sens %>% filter(Year==2022)
+overlapping::overlap(list(x_sens$.prediction, y_sens$.prediction))
+
 ##########################################################################################
 ############################### PSD values ###############################################
 ##########################################################################################
@@ -173,12 +198,585 @@ library(FSA)
 ##View PSD length cut-offs
 (fhc.cuts <- psdVal("Flathead Catfish"))
 
+#percent substock
+results <- dfhc %>%
+  group_by(Year) %>%
+  summarise(
+    proportion = 1 - (sum(Length >= fhc.cuts["stock"], na.rm = TRUE) / n()),
+    .groups = "drop"
+  ); results
+
 #Data manipulation
 all <- dfhc %>% 
   filter(Length >= fhc.cuts["stock"]) %>% 
   mutate(gcat = lencat(Length, breaks=fhc.cuts, use.names = T, drop.levels = T))
 
 #subset by year and calculate PSD w/ Confidence Interval
-dat <- all %>% filter(Year==2018) 
+dat <- all %>% filter(Year==2024) 
 psdCalc(~Length, data=dat, species="Flathead Catfish", what = "traditional")
+
+##############################################################################################
+####################        Year-specific age-length keys       ##############################
+##############################################################################################
+#ALK-Flat 2022
+AgedFlat22 <- filter(dfhc,!is.na(ConsensusAge)&Year==2022) %>% mutate(ALKAge=ConsensusAge)
+(rawf22 <- xtabs(~LenCat+ConsensusAge,data=AgedFlat22))
+alkFlat22 <- prop.table(rawf22,margin=1)
+alkPlot(alkFlat22,type="barplot")
+##Apply ALK
+unAgedFlat22 <- filter(dfhc, is.na(ConsensusAge)&Year==2022)
+xtabs(~LenCat, data=unAgedFlat22)
+unAgedFlat22 <- alkIndivAge(alkFlat22, ALKAge~Length, data=unAgedFlat22)
+Flat22 <- rbind(AgedFlat22,unAgedFlat22)
+
+hist(Flat22$ALKAge, breaks=seq(-1,25,by=1), ylim=c(0,200), col="dark gray")
+xtabs(~ALKAge, data=Flat22)
+
+#ALK-Flat 2023
+AgedFlat23 <- filter(dfhc,!is.na(ConsensusAge)&Year==2023) %>% mutate(ALKAge=ConsensusAge)
+(rawf23 <- xtabs(~LenCat+ConsensusAge,data=AgedFlat23))
+alkFlat23 <- prop.table(rawf23,margin=1)
+alkPlot(alkFlat23,type="barplot")
+##Apply ALK
+unAgedFlat23 <- filter(dfhc, is.na(ConsensusAge)&Year==2023)
+xtabs(~LenCat, data=unAgedFlat23)
+unAgedFlat23 <- alkIndivAge(alkFlat23, ALKAge~Length, data=unAgedFlat23)
+Flat23 <- rbind(AgedFlat23,unAgedFlat23)
+
+hist(Flat23$ALKAge, breaks=seq(-1,25,by=1), ylim=c(0,200), col="dark gray")
+xtabs(~ALKAge, data=Flat23)
+
+#ALK-Flat 2024 
+AgedFlat24 <- filter(dfhc,!is.na(ConsensusAge)&Year==2024) %>% mutate(ALKAge=ConsensusAge)
+(rawf24 <- xtabs(~LenCat+ConsensusAge,data=AgedFlat24))
+alkFlat24 <- prop.table(rawf24,margin=1)
+alkPlot(alkFlat24,type="barplot")
+##Apply ALK
+unAgedFlat24 <- filter(dfhc, is.na(ConsensusAge)&Year==2024)
+xtabs(~LenCat, data=unAgedFlat24)
+unAgedFlat24 <- alkIndivAge(alkFlat24, ALKAge~Length, data=unAgedFlat24)
+Flat24 <- rbind(AgedFlat24,unAgedFlat24)
+
+hist(Flat24$ALKAge, breaks=seq(-1,25,by=1), ylim=c(0,200), col="dark gray")
+xtabs(~ALKAge, data=Flat24)
+
+#combine all data
+allFHC <- rbind(Flat22, Flat23, Flat24)
+
+#Merge column with ALK Ages in original dataframe
+dfhc2 <- dfhc %>% 
+  left_join(allFHC %>% select(ID, Year, ALKAge), 
+            by=c("ID", "Year"), 
+            suffix = c("", ".new"))  %>%
+  mutate(
+    ALKAge = coalesce(ALKAge, ALKAge.new)
+  ) %>%
+  select(-ALKAge.new)
+
+#total number of samples matches the number of fish included in other analyses
+dfhc2 %>% group_by(Year) %>% summarize(total = length(ALKAge))
+
+#Add a designation for flood timing
+final <- dfhc2 %>% mutate(Flood = ifelse(Year-ALKAge<2019, "Pre", 
+                                ifelse(Year-ALKAge==2019, "Flood", "Post")))
+
+#summarize the observed data by ALK ages
+final %>% 
+  filter(ALKAge==3) %>% 
+  group_by(Year, ALKAge) %>% 
+  summarize(n = length(Length), 
+            meanTL = mean(Length), 
+            sdTL=sd(Length), 
+            seTL = sd(Length)/sqrt(length(Length)))
+
+#plot the result to view trends
+final %>% 
+  filter(ALKAge<18) %>% 
+  group_by(Year, ALKAge) %>% 
+  summarize(total = length(Length), 
+            meanTL = mean(Length), 
+            sdTL=sd(Length), 
+            seTL = sd(Length)/sqrt(length(Length))) %>% 
+  ggplot(aes(x=ALKAge, y=meanTL, group=Year, col=as.factor(Year)))+
+  geom_line()+
+  geom_point()+
+  theme_classic()
+
+
+#age-frequency plot
+final %>% ggplot(aes(x=ALKAge, group=Flood, fill=Flood))+
+  geom_histogram(binwidth=1, col="black") +
+  scale_fill_manual(values = c("#A98BCF", "black", "#8EBD9E"), breaks=c("Pre", "Flood", "Post"))+
+  facet_wrap(~Year)+
+  theme_classic()
+
+#data summaries for plotting below
+yearly_n <- final %>% group_by(Year) %>% summarize(total = length(ALKAge)); yearly_n
+
+#summarize relative frequencies
+final_rel<-final %>% 
+  group_by(Year, ALKAge, Flood) %>% 
+  count(ALKAge, name = "Frequency") %>% 
+  ungroup %>% 
+  group_by(Year) %>% 
+  mutate(relfreq = Frequency / sum(Frequency))
+
+#relative age-frequency plot
+final_rel %>% ggplot(aes(x=ALKAge, y=relfreq))+
+  geom_col(aes(fill=Flood), col="black") +
+  scale_fill_manual(values = c("#A98BCF", "black", "#8EBD9E"), breaks=c("Pre", "Flood", "Post"))+
+  facet_wrap(~Year)+
+  xlab("Age (years)")+
+  ylab("Relative frequency")+
+  scale_y_continuous(limits=c(0,0.4))+
+  guides(fill = guide_legend(title=NULL)) +
+  geom_label(data = yearly_n, aes(label = paste("n =",total), y = 0.35, x=20))+
+  theme_bw()+
+  theme(panel.grid.minor = element_blank(),
+        axis.text = element_text(size=12), 
+        axis.title = element_text(size=15), 
+        strip.text = element_text(size=11), 
+        legend.text = element_text(size=11), 
+        legend.title = element_text(size=11))
+
+#ggsave("Figure5. Age Frequency.jpeg", height=6, width=8, units="in", dpi=800)
+
+#determine age-3 relative frequency by sampling year
+final_rel %>% filter(ALKAge==3) 
+##############################################################################################################
+####################################     Year-class Strength Analysis     ####################################
+##############################################################################################################
+#Catch curves ages 3-15
+#Bayesian Regression Model
+
+################################
+#summarize data and add catch-curve variables
+aged_summary <- final %>% 
+  group_by(Year, ALKAge, Flood) %>% 
+  summarize(count=length(ALKAge)) %>% 
+  filter(ALKAge>2&ALKAge<16) %>% 
+  ungroup() %>% 
+  add_row(Year = 2024, ALKAge = 11, count = 0, Flood = "Pre") %>% #missing year of data in 2024
+  rename(Age = ALKAge) %>% 
+  arrange(Year, Age) %>% 
+  mutate(YearClass = Year - Age, 
+         count_adj = count+1,
+         logcount = log(count_adj), 
+         Year = as.factor(Year)); aged_summary %>% print(n=60)
+
+# simulate priors
+priors <- tibble(a = rnorm(100, 4, 2),
+                 b = rnorm(100, -0.2, 0.2),
+                 sigma = rexp(100, 1),
+                 sim = 1:100)
+
+# data (only the x values, since we're simulating y and mu and pretending we don't have them yet)
+x <- aged_summary$Age
+
+# combine and simulate
+prior_and_x <- priors %>% expand_grid(x = x) %>%    # combine priors and x's
+  mutate(mu = a + b*x ,                              # create new column call it mu- simulate regressions
+         y = rnorm(nrow(.), mu, sigma))             # new column called y simulate data (e.g., y_rep)
+
+# plot
+prior_and_x %>% 
+  ggplot(aes(x = x, y = mu, group = sim)) + 
+  geom_line() +
+  geom_point(data=aged_summary,aes(y = logcount, x=Age, group=NA)) +
+  labs(y = "sim")
+
+#Get prior
+get_prior(logcount ~ Age*Year,
+          data = aged_summary, family = gaussian())
+
+# Unweighted regression of log(catch) ~ Age*Year
+YCSmod <- brm(logcount ~ Age*Year,
+              data = aged_summary ,
+              family = gaussian(),
+              prior = c(prior(normal(3, 2), class = "Intercept"),
+                        prior(normal(-0.2, 0.2), class = "b"),
+                        prior(exponential(1), class = "sigma")),
+              file = "YCSmod.rds",
+              iter=2000, chains=4,cores = 4)
+
+summary(YCSmod)
+plot(conditional_effects(YCSmod,re_formula=NULL), points = TRUE)
+pp_check(YCSmod,type="boxplot",notch=FALSE)
+
+#### getting mean predictions #####
+post_res <- tibble(expand.grid(Age = seq(3,15,1), Year=as.factor(c(2018, 2022, 2023, 2024)))) %>% 
+  add_epred_draws(YCSmod) %>% mean_qi(.epred)
+
+#create weights from residual posterior expectations
+ccbays_weight <- right_join(aged_summary, post_res %>% select(.epred, Age, Year), by=c("Age", "Year")) %>% 
+  rename(weight=.epred)
+
+########################
+#weighted residual model --> weighting the regression by the predicted log(catch) values from YCSmod
+#run weighted model
+YCSmod_weight <- brm(logcount | weights(weight) ~ Age*Year, 
+                     data = ccbays_weight,
+                     family = gaussian(),
+                     prior = c(prior(normal(3, 2), class = "Intercept"),
+                               prior(normal(-0.2, 0.2), class = "b"),
+                               prior(exponential(1), class = "sigma")),
+                     file = "YCSmod_weight.rds",
+                     iter=2000, chains=4,cores = 4)
+
+summary(YCSmod_weight)
+plot(conditional_effects(YCSmod_weight,re_formula=NULL), points = TRUE)
+pp_check(YCSmod_weight,type="boxplot",notch=FALSE)
+bayes_R2(YCSmod_weight)
+
+#summarize posterior expectations of log(catch) values across ages
+post_res_weight <- tibble(expand.grid(Age = seq(3,15,1), Year=as.factor(c(2018, 2022, 2023, 2024)))) %>%
+  add_epred_draws(YCSmod_weight) %>% mean_qi(.epred)
+
+#calculate residuals from posterior sample
+post_res_weight2 <- right_join(post_res_weight,ccbays_weight %>% select(Age, logcount, Year), by=c("Age", "Year")) %>%
+  mutate(residual = logcount-.epred,
+         YearClass = as.numeric(as.character(Year))-Age,
+         Flood = ifelse(YearClass<2019, "Pre", 
+                        ifelse(YearClass==2019, "Flood", "Post")))
+
+#plot
+post_res_weight2 %>% 
+  ggplot()+
+  geom_point(aes(x=Age, y=residual, col = Year), size=3)+
+  theme_classic()
+
+#mean by year-class plot
+post_res_weight2 %>% 
+  group_by(YearClass, Flood) %>% 
+  summarize(res = mean(residual), se = sd(residual)/sqrt(length(residual))) %>% 
+  ggplot()+
+  geom_errorbar(aes(x=YearClass, y=res, ymin=res-se, ymax=res+se, col=Flood), width=0.5)+
+  geom_point(aes(x=YearClass, y=res, col=Flood), size=1.5)+
+  # geom_hline(yintercept=-1, linetype = 2)+ 
+  # geom_hline(yintercept=1, linetype = 2)+ 
+  xlab("Year class")+
+  scale_y_continuous(limits=c(-2.5,2.5))+
+  scale_x_continuous(breaks=seq(2003, 2021, 2))+
+  scale_color_manual(values = c("#A98BCF", "black", "#8EBD9E"), breaks=c("Pre", "Flood", "Post"))+
+  ylab("Mean catch-curve residual")+
+  guides(color = guide_legend(title=NULL)) +
+  theme_classic()+
+  theme(axis.text = element_text(size=7), 
+        axis.title = element_text(size=9),
+        legend.text = element_text(size=6), 
+        legend.title = element_text(size=7),
+        legend.key.spacing.y = unit(-0.05, "in"))
+
+#ggsave("Figure6. Year-class strength residuals.jpeg", height=3, width=4, units="in", dpi=800)
+
+
+
+# #########################################################################################
+# #######  Sensitivity analysis  #########################
+# #Unweighted regression of log(catch) ~ Age with Year random effect
+#sensitivity
+YCSmod_sens <- brm(logcount ~ Age*Year,
+                   data = aged_summary ,
+                   family = gaussian(),
+                   prior = c(prior(normal(3, 4), class = "Intercept"),
+                             prior(normal(-0.2, 0.4), class = "b"),
+                             prior(exponential(0.5), class = "sigma")),
+                   file = "YCSmod_sens.rds",
+                   iter=2000, chains=4,cores = 4)
+
+summary(YCSmod_sens)
+
+#### getting mean predictions #####
+post_res_sens <- tibble(expand.grid(Age = seq(3,15,1), Year=as.factor(c(2018, 2022, 2023, 2024)))) %>% 
+  add_epred_draws(YCSmod_sens) %>% mean_qi(.epred)
+
+#create weights from residual posterior expectations
+ccbays_weight_sens <- right_join(aged_summary, post_res_sens %>% select(.epred, Age, Year), by=c("Age", "Year")) %>% 
+  rename(weight=.epred)
+
+#Weighted regression
+YCSmod_weight_sens <- brm(logcount | weights(weight) ~ Age*Year, 
+                          data = ccbays_weight_sens,
+                          family = gaussian(),
+                          prior = c(prior(normal(3, 2), class = "Intercept"),
+                                    prior(normal(-0.2, 0.2), class = "b"),
+                                    prior(exponential(1), class = "sigma")),
+                          file = "YCSmod_weight_sens.rds",
+                          iter=2000, chains=4,cores = 4)
+
+
+#summarize posterior expectations of log(catch) values across ages
+post_res_weight_sens <- tibble(expand.grid(Age = seq(3,15,1), Year=as.factor(c(2018, 2022, 2023, 2024)))) %>%
+  add_epred_draws(YCSmod_weight_sens) %>% mean_qi(.epred)
+
+#calculate residuals from posterior sample
+post_res_weight2_sens <- right_join(post_res_weight_sens ,ccbays_weight_sens %>% select(Age, logcount, Year), by=c("Age", "Year")) %>%
+  mutate(residual = logcount-.epred,
+         YearClass = as.numeric(as.character(Year))-Age,
+         Flood = ifelse(YearClass<2019, "Pre", 
+                        ifelse(YearClass==2019, "Flood", "Post")))
+
+sens <- post_res_weight2_sens %>% 
+  group_by(YearClass, Flood) %>% 
+  summarize(res_sens = mean(residual), se_sens = sd(residual)/sqrt(length(residual))); sens
+
+#compare estimates
+post_res_weight2 %>% 
+  group_by(YearClass, Flood) %>% 
+  summarize(res = mean(residual), se = sd(residual)/sqrt(length(residual))) %>% 
+  left_join(sens) %>% 
+  mutate(Diff_2_sens = (res - res_sens),
+         PercDiff_2_sens = (res - res_sens)/res*100) %>% 
+  ungroup() %>% 
+  summarize(max(Diff_2_sens))
+
+##############################################################################################################
+####################################     von Bertalanffy Growth Curve     ####################################
+##############################################################################################################
+
+
+#Give all blank sex cells a value of "U" for "Unknown"
+Age_L<-final %>% 
+  select(Length, ALKAge, Year)%>%
+  rename(Age=ALKAge) %>% 
+  mutate(Year = as.factor(Year))
+
+Age_L %>% ggplot(aes(x=Age,y=Length))+
+  geom_point(aes(color=Year), alpha=0.3)+
+  theme_classic()
+
+######################### Formula ################################
+form_1 <- bf(Length ~ Linf *(1- exp(-K*(Age-t0))), #Von B Equation
+             Linf ~ Year, #Year as a fixed effect
+             K ~ Year,
+             t0 ~ Year,
+             nl = TRUE)
+
+############prior Simulations############
+priors = tibble(Linf = abs(rnorm(100, 1276, 50)),
+                K = abs(rnorm(100,0.065 ,0.1)),
+                t0 = rnorm(100, -0.469, 0.5),
+                iter = 1:100)
+
+prior_sims = priors %>% 
+  expand_grid(Age_L %>% distinct(Age) %>% 
+                bind_rows(tibble(Age = 0))) %>% 
+  mutate(length_sims = Linf *(1- exp(-K*(Age-t0))))
+
+
+ggplot() + 
+  geom_line(data=prior_sims, aes(x = Age, y = length_sims, group = iter))+
+  geom_point(data=Age_L,aes(x=Age, y=Length,color="red"))
+
+##################### Model ########################
+get_prior(form_1, data = Age_L, family = gaussian())
+
+FHCVonYearModel <- brm(form_1 ,
+                       data = Age_L,
+                       prior = c(prior(normal(1276, 50), nlpar = "Linf"),
+                                 prior(normal(0, 100), nlpar = "Linf",coef="Year2022"),
+                                 prior(normal(0, 100), nlpar = "Linf",coef="Year2023"),
+                                 prior(normal(0, 100), nlpar = "Linf",coef="Year2024"),
+                                 prior(normal(0.065, 0.1), nlpar = "K",lb=0),
+                                 prior(normal(0, 0.2), nlpar = "K",coef="Year2022"),
+                                 prior(normal(0, 0.2), nlpar = "K",coef="Year2023"),
+                                 prior(normal(0, 0.2), nlpar = "K",coef="Year2024"),
+                                 prior(normal(-0.469, 0.5), nlpar = "t0"),
+                                 prior(normal(0, 1), nlpar = "t0",coef="Year2022"),
+                                 prior(normal(0, 1), nlpar = "t0",coef="Year2023"),
+                                 prior(normal(0, 1), nlpar = "t0",coef="Year2024"),
+                                 prior(exponential(0.1), class="sigma")),
+                       file = "FHCVonBYearModel.rds",
+                       family = gaussian(),
+                       iter=2000, chains = 4, cores=8)
+
+print(FHCVonYearModel, digits=3)
+plot(conditional_effects(FHCVonYearModel), points = TRUE)
+pp_check(FHCVonYearModel,type="boxplot")
+
+################# Posterior Sampling ###############################
+#length at age predictions from von B
+vonB_preds <- Age_L %>% select(-Length) %>% 
+  group_by(Year) %>% 
+  complete(Age=min(Age):max(Age)) %>% 
+  ungroup() %>% 
+  group_by(Age, Year) %>% 
+  arrange(Year, Age) %>% 
+  distinct() %>% 
+  add_epred_draws(FHCVonYearModel, re_formula = NULL)
+
+vonB_preds %>%
+  group_by(Age, Year) %>% 
+  summarize(TL=mean(.epred),
+            SD=sd(.epred))
+
+
+################# Plotting Posterior ################################
+vonB_preds %>% 
+  group_by(Age, Year) %>% 
+  mean_qi(.epred) %>% 
+  ggplot(aes(x = Age, y = .epred)) + 
+  geom_point(data=Age_L, aes(y=Length, x=Age, fill=Year), alpha=0.3, pch=21, size=2.5)+
+  ylab("Total length (mm)")+
+  xlab("Age (years)")+
+  scale_fill_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
+  geom_line(aes(color = Year)) +
+  scale_color_manual(values = c("#26045A", "#225ea8", "#41b6c4", "#8EBD9E")) +
+  geom_ribbon(aes(fill = Year, ymin = .lower, ymax = .upper),
+              alpha = 0.3) +
+  theme_classic()+
+  scale_y_continuous(limits = c(0,1200), breaks = seq(0,1200, 100))+
+  scale_x_continuous(limits = c(1,25), breaks= seq(1,25,1))+
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        panel.background = element_rect(fill=NA),
+        legend.position = c(.95, 0.5),
+        legend.justification = c("right", "top"),
+        legend.box.just = "right",
+#        legend.text = element_text(size=12),
+        legend.title = element_text(size = 12),
+        axis.title=element_text(size=16),
+        axis.text = element_text(size = 12))
+
+#ggsave("Figure7.VonB.jpeg", height=6, width=8, units="in", dpi=800)
+
+
+################# probability statements that mean TL at age 5 is greater in  sample combinations ################# 
+vonB_preds %>% 
+  filter(Age==5) %>% 
+  group_by(Year) %>% 
+  mean_qi(.epred)
+
+draws_wide<-vonB_preds %>% 
+  filter(Age==5) %>% 
+  ungroup() %>% 
+  select(.draw, Age, Year, .epred) %>% 
+  group_by(Age) %>% 
+  pivot_wider(names_from = Year, values_from=.epred) %>% 
+  mutate(diff_18_22=`2018`-`2022`,
+         diff_18_23=`2018`-`2023`,
+         diff_18_24=`2018`-`2024`,
+         diff_22_23=`2022`-`2023`, 
+         diff_22_24=`2022`-`2024`,
+         diff_23_24=`2023`-`2024`)
+#probabilites
+draws_wide %>% 
+  summarize(perc_diff_18_22 = sum(diff_18_22>0)/4000*100, 
+            perc_diff_18_23 = sum(diff_18_23>0)/4000*100,
+            perc_diff_18_24 = sum(diff_18_24>0)/4000*100,
+            perc_diff_22_23 = sum(diff_22_23>0)/4000*100,
+            perc_diff_22_24 = sum(diff_22_24>0)/4000*100,
+            perc_diff_23_24 = sum(diff_23_24>0)/4000*100) 
+
+#Gallucci and Quinn growth rate (1979)
+growth_coef <- as_tibble(as_draws_df(FHCVonYearModel)) %>% 
+  mutate(coef18 = b_Linf_Intercept * b_K_Intercept, 
+         coef22 = (b_Linf_Intercept + b_Linf_Year2022) * (b_K_Intercept + b_K_Year2022), 
+         coef23 = (b_Linf_Intercept + b_Linf_Year2023) * (b_K_Intercept + b_K_Year2023), 
+         coef24 = (b_Linf_Intercept + b_Linf_Year2024) * (b_K_Intercept + b_K_Year2024)) %>% 
+  select(coef18, coef22, coef23, coef24) %>% 
+  rename("2018" = coef18, "2022" = coef22, "2023" = coef23, "2024" = coef24) %>% 
+  pivot_longer(names_to = "Year", values_to = "coef", cols=1:4) %>% 
+  mutate(Flood = ifelse(Year==2018, "Pre", "Post"))
+
+growth_coef %>% group_by(Year) %>% mean_qi(coef)
+
+#probabilites
+as_draws_df(FHCVonYearModel) %>% 
+  mutate(coef18 = b_Linf_Intercept * b_K_Intercept, 
+         coef22 = (b_Linf_Intercept + b_Linf_Year2022) * (b_K_Intercept + b_K_Year2022), 
+         coef23 = (b_Linf_Intercept + b_Linf_Year2023) * (b_K_Intercept + b_K_Year2023), 
+         coef24 = (b_Linf_Intercept + b_Linf_Year2024) * (b_K_Intercept + b_K_Year2024), 
+         coef_diff_18_22 = coef18 - coef22,
+         coef_diff_18_23 = coef18 - coef23,
+         coef_diff_18_24 = coef18 - coef24,
+         coef_diff_22_23 = coef22 - coef23,
+         coef_diff_22_24 = coef22 - coef24,
+         coef_diff_23_24 = coef23 - coef24) %>% 
+  summarize(perc_coef_diff_18_22 = sum(coef_diff_18_22>0)/4000*100, 
+            perc_coef_diff_18_23 = sum(coef_diff_18_23>0)/4000*100,
+            perc_coef_diff_18_24 = sum(coef_diff_18_24>0)/4000*100,
+            perc_coef_diff_22_23 = sum(coef_diff_22_23>0)/4000*100,
+            perc_coef_diff_22_24 = sum(coef_diff_22_24>0)/4000*100,
+            perc_coef_diff_23_24 = sum(coef_diff_23_24>0)/4000*100) 
+#visualize
+growth_coef %>% 
+  arrange(Year) %>% 
+  ggplot()+
+  geom_violin(aes(x=Year, y = coef, fill = Flood))+
+  theme_classic()+
+  scale_fill_manual(values = c("#A98BCF", "#8EBD9E"), breaks=c("Pre", "Post"), name = NULL)+
+  scale_y_continuous(limits = c(70,221), breaks = seq(80,220, 20))+
+  ylab(expression(paste("Growth rate, ", italic(omega), " (mm/year)")))+
+  theme(panel.grid = element_blank(),
+        plot.title = element_blank(),
+        legend.title = element_text(size = 8),
+        axis.title=element_text(size=11),
+        axis.text = element_text(size = 8),
+        legend.key.size = unit(0.1, "in"))
+
+#ggsave("Figure8.Growthrate.jpeg", height=3, width=3, units="in", dpi=800)
+
+####################################################################################
+########################      von B sensitivity     ################################
+### Sensitivity Analysis
+FHCVonBYearModel_sens <- brm(form_1 ,
+                             data = Age_L,
+                             prior = c(prior(normal(1276, 100), nlpar = "Linf"),
+                                       prior(normal(0, 200), nlpar = "Linf",coef="Year2022"),
+                                       prior(normal(0, 200), nlpar = "Linf",coef="Year2023"),
+                                       prior(normal(0, 200), nlpar = "Linf",coef="Year2024"),
+                                       prior(normal(0.065, 0.2), nlpar = "K",lb=0),
+                                       prior(normal(0, 0.4), nlpar = "K",coef="Year2022"),
+                                       prior(normal(0, 0.4), nlpar = "K",coef="Year2023"),
+                                       prior(normal(0, 0.4), nlpar = "K",coef="Year2024"),
+                                       prior(normal(-0.469, 1), nlpar = "t0"),
+                                       prior(normal(0, 2), nlpar = "t0",coef="Year2022"),
+                                       prior(normal(0, 2), nlpar = "t0",coef="Year2023"),
+                                       prior(normal(0, 2), nlpar = "t0",coef="Year2024"),
+                                       prior(exponential(0.05), class="sigma")),                       
+                             file = "FHCVonBYearModel_sens.rds",
+                             family = gaussian(),
+                             iter=2000, chains = 4, cores=4)
+
+##sensitivity comparison
+vonB_preds_sens <- Age_L %>% select(-Length) %>% 
+  group_by(Year) %>% 
+  complete(Age=min(Age):max(Age)) %>% 
+  ungroup() %>% 
+  group_by(Age, Year) %>% 
+  arrange(Year, Age) %>% 
+  distinct() %>% 
+  add_epred_draws(FHCVonBYearModel_sens, re_formula = NULL)
+
+vBsens<-vonB_preds_sens %>%
+  group_by(Age, Year) %>% 
+  summarize(TL_sens=mean(.epred),
+            SD_sens=sd(.epred)) %>% 
+  filter(Age==5)
+  
+
+vonB_preds %>%
+  filter(Age==5) %>% 
+  group_by(Age, Year) %>% 
+  summarize(TL=mean(.epred),
+            SD=sd(.epred)) %>% 
+  left_join(vBsens) 
+
+#  
+growth_coef_sens <- as_tibble(as_draws_df(FHCVonBYearModel_sens)) %>% 
+  mutate(coef18 = b_Linf_Intercept * b_K_Intercept, 
+         coef22 = (b_Linf_Intercept + b_Linf_Year2022) * (b_K_Intercept + b_K_Year2022), 
+         coef23 = (b_Linf_Intercept + b_Linf_Year2023) * (b_K_Intercept + b_K_Year2023), 
+         coef24 = (b_Linf_Intercept + b_Linf_Year2024) * (b_K_Intercept + b_K_Year2024)) %>% 
+  select(coef18, coef22, coef23, coef24) %>% 
+  rename("2018" = coef18, "2022" = coef22, "2023" = coef23, "2024" = coef24) %>% 
+  pivot_longer(names_to = "Year", values_to = "coef_sens", cols=1:4) %>% 
+  mutate(Flood = ifelse(Year==2018, "Pre", "Post")) %>% 
+  group_by(Year) %>% mean_qi(coef_sens)
+
+growth_coef %>% group_by(Year) %>% mean_qi(coef) %>% select(Year, coef) %>% 
+  left_join(growth_coef_sens %>% select(Year, coef_sens), by="Year") %>% 
+  mutate(diff = coef-coef_sens, 
+         perc_diff = (coef-coef_sens)/coef*100)
 
